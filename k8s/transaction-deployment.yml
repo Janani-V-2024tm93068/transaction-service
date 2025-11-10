@@ -1,0 +1,159 @@
+# Secret for Transaction DB
+apiVersion: v1
+kind: Secret
+metadata:
+  name: transaction-db-secret
+type: Opaque
+data:
+  POSTGRES_USER: dHJhbnNhY3Rpb251c2Vy       # transactionuser
+  POSTGRES_PASSWORD: dHJhbnNhY3Rpb25wYXNz   # transactionpass
+  POSTGRES_DB: dHJhbnNhY3Rpb25kYg==         # transactiondb
+
+---
+# PVC for Transaction DB
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: transaction-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Transaction DB Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-db
+  template:
+    metadata:
+      labels:
+        app: transaction-db
+    spec:
+      containers:
+        - name: transaction-db
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_DB
+          volumeMounts:
+            - name: transaction-db-storage
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - "$(POSTGRES_USER)"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: transaction-db-storage
+          persistentVolumeClaim:
+            claimName: transaction-db-pvc
+
+---
+# Transaction DB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-db
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+  selector:
+    app: transaction-db
+
+---
+# Transaction Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+    spec:
+      containers:
+        - name: transaction-service
+          image: transaction-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8083
+          env:
+            - name: DB_HOST
+              value: transaction-db
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: transaction-db-secret
+                  key: POSTGRES_DB
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:8084"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8083
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8083
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# Transaction Service ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8083
+  selector:
+    app: transaction-service
